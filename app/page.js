@@ -2,67 +2,42 @@
 
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useAuth } from './context/AuthContext'; // NEW: Import useAuth to get user details
-import Link from 'next/link'; // NEW: Import Link for redirect messages
+import { useAuth } from './context/AuthContext';
+import Link from 'next/link';
 
-const API_BASE_URL = 'http://localhost:8000'; // Groq backend server
+const API_BASE_URL = 'http://localhost:8000';
 
 export default function Home() {
-  const { user, isAuthenticated } = useAuth(); // NEW: Get authenticated user details
+  const { user, isAuthenticated } = useAuth();
   const [files, setFiles] = useState([]);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
-  // REMOVE THESE OLD STATES (no longer asking general questions)
-  // const [question, setQuestion] = useState('');
-  // const [answer, setAnswer] = useState('');
-  // const [lastModel, setLastModel] = useState('');
-
   const [isProcessing, setIsProcessing] = useState(false);
-  // RENAMED STATE:
-  const [isCatalogProcessed, setIsCatalogProcessed] = useState(false); // Renamed from isPdfProcessed
-
+  const [isCatalogProcessed, setIsCatalogProcessed] = useState(false);
   const [serverStatus, setServerStatus] = useState('checking');
   const [aiProvider, setAiProvider] = useState('');
   const [processingStats, setProcessingStats] = useState(null);
-  
-  // NEW STATE FOR INTERACTIVE ORDER FLOW - MODIFIED to support multiple items
-  const [currentStep, setCurrentStep] = useState('initial'); // 'initial', 'item_selection', 'quantity_selection', 'date_selection', 'time_selection', 'summary', 'order_complete'
-  const [cart, setCart] = useState([]); // Array of {itemName, quantity, price, availableQuantity}
-  const [currentItem, setCurrentItem] = useState(null); // Currently selected item for quantity input
+  const [currentStep, setCurrentStep] = useState('initial');
+  const [cart, setCart] = useState([]);
+  const [currentItem, setCurrentItem] = useState(null);
   const [orderData, setOrderData] = useState({
     deliveryDate: '',
     partOfDay: '',
     deliveryTime: ''
   });
-  const [availableItems, setAvailableItems] = useState([]); // List of item names from catalog
-  const [fullCatalog, setFullCatalog] = useState([]); // Full structured catalog data
-  const [currentInput, setCurrentInput] = useState(''); // Input for current step
-  const [inputError, setInputError] = useState(''); // Error message for current input
-  const [stepMessage, setStepMessage] = useState(''); // Message specific to the current ordering step
+  const [availableItems, setAvailableItems] = useState([]);
+  const [fullCatalog, setFullCatalog] = useState([]);
+  const [currentInput, setCurrentInput] = useState('');
+  const [inputError, setInputError] = useState('');
+  const [stepMessage, setStepMessage] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
 
-  // Check server health on component mount
   useEffect(() => {
     checkServerHealth();
-  }, []);
-
-  // NEW EFFECT: To fetch catalog items once documents are processed AND user is authenticated
-useEffect(() => {
-    checkServerHealth();
-  }, []);
-
-  // NEW EFFECT: To fetch catalog items once documents are processed AND user is authenticated
-  useEffect(() => {
-    if (isCatalogProcessed && isAuthenticated) { // Make sure BOTH conditions are met
+    if (isAuthenticated) {
       fetchCatalogItems();
     }
-    // Also, reset order flow if authentication status changes to not authenticated
-    if (!isAuthenticated) {
-      resetOrderFlow();
-      setIsCatalogProcessed(false);
-    }
-  }, [isCatalogProcessed, isAuthenticated]);// Dependencies: run when these change
-
+  }, [isAuthenticated]);
 
   const checkServerHealth = async () => {
     try {
@@ -76,17 +51,44 @@ useEffect(() => {
     }
   };
 
+  const fetchCatalogItems = async () => {
+    setStepMessage('Fetching catalog items...');
+    setInputError('');
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API_BASE_URL}/api/catalog`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setFullCatalog(response.data.items);
+      setAvailableItems(response.data.items.map(item => item.item_name));
+      
+      if (response.data.items && response.data.items.length > 0) {
+       const initialMessage = `Welcome! I can help you place an order. 😊\nHere are the items we have available today: **${response.data.items.map(item => item.item_name).join(', ')}**.\n\nWhat would you like to get? (You can add multiple items by typing them one at a time)`;
+        
+        setChatHistory([{ role: 'assistant', content: initialMessage }]);
+        setCurrentStep('item_selection');
+        setStepMessage('');
+        setInputError('');
+        setIsCatalogProcessed(true);
+      } else {
+        setStepMessage('No items could be extracted from the catalog. Please ensure your catalog file has "Item Name", "Price", and "Quantity" columns.');
+        setMessageType('warning');
+        setIsCatalogProcessed(false);
+        resetOrderFlow();
+      }
+    } catch (error) {
+      setStepMessage(`❌ Failed to fetch catalog items: ${error.response?.data?.error || error.message}. Please try processing documents again.`);
+      setMessageType('error');
+      setIsCatalogProcessed(false);
+      resetOrderFlow();
+    }
+  };
 
   const onFileChange = (e) => {
     const selectedFiles = Array.from(e.target.files);
     setFiles(selectedFiles);
-    // RENAMED STATE HERE:
     setIsCatalogProcessed(false);
-    // REMOVED: setAnswer('');
     setProcessingStats(null);
-    // REMOVED: setLastModel('');
-    
-    // NEW: Reset order flow on new file selection
     resetOrderFlow();
     
     if (selectedFiles.length > 0) {
@@ -105,7 +107,6 @@ useEffect(() => {
     }
   };
 
-  // NEW FUNCTION: Resets all order-specific state
   const resetOrderFlow = () => {
     setCurrentStep('initial');
     setCart([]);
@@ -127,51 +128,43 @@ useEffect(() => {
     setFiles([]);
     setMessage('');
     setMessageType('');
-    // REMOVED: setQuestion('');
-    // REMOVED: setAnswer('');
-    // RENAMED STATE HERE:
     setIsCatalogProcessed(false);
     setProcessingStats(null);
-    // REMOVED: setLastModel('');
-    
-    // NEW: Reset order flow when resetting all
     resetOrderFlow();
     
-    // Reset file input
     const fileInput = document.getElementById('file-upload');
     if (fileInput) {
       fileInput.value = '';
     }
   };
 
-  // NEW HELPER FUNCTION: Generates time options based on part of day
-const generateTimeOptions = (partOfDay) => {
-  const options = [];
-  let startHour, endHour;
+  const generateTimeOptions = (partOfDay) => {
+    const options = [];
+    let startHour, endHour;
 
-  switch (partOfDay) {
-    case 'Morning':
-      startHour = 8;
-      endHour = 11; // 8 AM to 11 AM (exclusive of 12 PM)
-      break;
-    case 'Afternoon':
-      startHour = 12;
-      endHour = 16; // 12 PM to 4 PM (exclusive of 5 PM)
-      break;
-    case 'Evening':
-      startHour = 17;
-      endHour = 20; // 5 PM to 8 PM (exclusive of 9 PM)
-      break;
-    default:
-      return []; // No options if partOfDay is not selected
-  }
+    switch (partOfDay) {
+      case 'Morning':
+        startHour = 8;
+        endHour = 11;
+        break;
+      case 'Afternoon':
+        startHour = 12;
+        endHour = 16;
+        break;
+      case 'Evening':
+        startHour = 17;
+        endHour = 20;
+        break;
+      default:
+        return [];
+    }
 
-  for (let h = startHour; h <= endHour; h++) {
-    const hourString = String(h).padStart(2, '0'); // e.g., "08"
-    options.push(`${hourString}:00`);
-  }
-  return options;
-};
+    for (let h = startHour; h <= endHour; h++) {
+      const hourString = String(h).padStart(2, '0');
+      options.push(`${hourString}:00`);
+    }
+    return options;
+  };
 
   const onFileUpload = async () => {
     if (files.length === 0) {
@@ -180,7 +173,6 @@ const generateTimeOptions = (partOfDay) => {
       return;
     }
 
-    // Validate file types
     const allowedExtensions = ['.pdf', '.xlsx', '.xls', '.csv'];
     const invalidFiles = files.filter(file => 
       !allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
@@ -195,7 +187,7 @@ const generateTimeOptions = (partOfDay) => {
     setIsProcessing(true);
     setMessage('Processing documents...');
     setMessageType('info');
-    resetOrderFlow(); // NEW: Ensure flow is reset before new upload
+    resetOrderFlow();
 
     const formData = new FormData();
     files.forEach((file) => {
@@ -209,73 +201,30 @@ const generateTimeOptions = (partOfDay) => {
           'Content-Type': 'multipart/form-data',
           Authorization: `Bearer ${token}`
         },
-        timeout: 120000 // 120 second timeout for document processing
+        timeout: 120000
       });
       
-      // Store processing statistics
       setProcessingStats({
         files_processed: response.data.files_processed,
-        chunks_created: response.data.chunks_created, // This will be 0 for PDFs only, for others it's total_chars/1000
+        chunks_created: response.data.chunks_created,
         total_chars: response.data.total_chars,
         timestamp: response.data.timestamp
       });
       
-      setMessage(`✅ Documents processed successfully! 
-📄 Files: ${response.data.files_processed} | 📝 Characters: ${response.data.total_chars?.toLocaleString() || 0}
+      setMessage(`✅ Documents processed successfully! \n📄 Files: ${response.data.files_processed} | 📝 Characters: ${response.data.total_chars?.toLocaleString() || 0}
 📋 Supported formats: ${response.data.supported_formats?.join(', ') || 'PDF, Excel, CSV'}`);
       setMessageType('success');
-      // RENAMED STATE HERE:
-      setIsCatalogProcessed(true); // Indicate catalog is ready
-      // The `useEffect` will now trigger fetchCatalogItems()
+      setIsCatalogProcessed(true);
     } catch (error) {
       setMessage(`❌ Document processing failed: ${error.response?.data?.error || error.message}`);
       setMessageType('error');
-      // RENAMED STATE HERE:
       setIsCatalogProcessed(false);
-      resetOrderFlow(); // NEW: Reset order flow on upload failure
+      resetOrderFlow();
     } finally {
       setIsProcessing(false);
     }
   };
-
-  // NEW FUNCTION: Fetch structured catalog items from backend
-    // NEW: Fetch structured catalog items from backend
-  const fetchCatalogItems = async () => {
-    setStepMessage('Fetching catalog items...'); // This message should appear first
-    setInputError(''); // Clear any previous errors
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_BASE_URL}/get_catalog_items`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setFullCatalog(response.data.items);
-      setAvailableItems(response.data.item_names);
-      
-      if (response.data.item_names && response.data.item_names.length > 0) {
-       const initialMessage = `Welcome! I can help you place an order. 😊\nHere are the items we have available today: **${response.data.item_names.join(', ')}**.\n\nWhat would you like to get? (You can add multiple items by typing them one at a time)`;
-        
-        setChatHistory([{ role: 'assistant', content: initialMessage }]);
-        setCurrentStep('item_selection');
-        setStepMessage(''); // We use chatHistory for messages now, so this can be cleared
-        setInputError('');
-      } else {
-        setStepMessage('No items could be extracted from the catalog. Please ensure your catalog file has "Item Name", "Price", and "Quantity" columns.');
-        setMessageType('warning');
-        setIsCatalogProcessed(false);
-        resetOrderFlow();
-      }
-    } catch (error) {
-      setStepMessage(`❌ Failed to fetch catalog items: ${error.response?.data?.error || error.message}. Please try processing documents again.`);
-      setMessageType('error');
-      setIsCatalogProcessed(false);
-      resetOrderFlow();
-    }
-  };
   
-  // NEW FUNCTION: Handle user input for each step of the order flow
-    // NEW: Replaces handleOrderInput. Manages the chat flow.
-    // NEW: Replaces handleOrderInput. Manages the chat flow.
-    // Find the handleSendMessage function
   const handleSendMessage = async () => {
     if (!currentInput.trim()) return;
 
@@ -286,17 +235,15 @@ const generateTimeOptions = (partOfDay) => {
     setIsProcessing(true);
     setInputError('');
 
-    // --- LOGICAL VALIDATION for non-fuzzy steps ---
     if (currentStep === 'quantity_selection') {
       const quantity = parseInt(userInput, 10);
       if (isNaN(quantity) || quantity <= 0 || quantity > currentItem.availableQuantity) {
         const quantityError = `Sorry, that's not a valid quantity. We have ${currentItem.availableQuantity} of ${currentItem.itemName} in stock. Please enter a number between 1 and ${currentItem.availableQuantity}.`;
         setChatHistory(prev => [...prev, { role: 'assistant', content: quantityError }]);
         setIsProcessing(false);
-        return; // End early, no need for LLM call
+        return;
       }
       
-      // Add item to cart
       const cartItem = {
         itemName: currentItem.itemName,
         quantity: quantity,
@@ -305,20 +252,17 @@ const generateTimeOptions = (partOfDay) => {
       };
       setCart(prev => {
         const newCart = [...prev, cartItem];
-        console.log('Cart after adding item:', newCart); // Debug log
         return newCart;
       });
       
-      // Store item name before clearing currentItem
       const addedItemName = currentItem.itemName;
       setCurrentItem(null);
       
-      // Ask if they want to add more items or proceed to delivery details
-      const continueMessage = `Great! Added ${quantity} x ${addedItemName} to your cart.\n\nWould you like to add another item, or shall we proceed with delivery details? (Type "done" to proceed, or another item name to add more)`;
+      const continueMessage = `Great! Added ${quantity} x ${addedItemName} to your cart.\n\nWould you like to add another item, or shall we proceed with delivery details? (Type \"done\" to proceed, or another item name to add more)`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: continueMessage }]);
-      setCurrentStep('item_selection'); // Go back to item selection
+      setCurrentStep('item_selection');
       setIsProcessing(false);
-      return; // End early
+      return;
     }
 
     if (currentStep === 'date_selection') {
@@ -330,18 +274,16 @@ const generateTimeOptions = (partOfDay) => {
         const dateError = "That doesn't seem to be a valid future date. Please enter a date in YYYY-MM-DD format, for today or later.";
         setChatHistory(prev => [...prev, { role: 'assistant', content: dateError }]);
         setIsProcessing(false);
-        return; // End early
+        return;
       }
       setOrderData(prev => ({ ...prev, deliveryDate: userInput, partOfDay: '', deliveryTime: '' }));
       setCurrentStep('time_selection');
       const timePrompt = "Excellent. Now please select a part of the day and a specific time for your delivery.";
       setChatHistory(prev => [...prev, { role: 'assistant', content: timePrompt }]);
       setIsProcessing(false);
-      return; // End early
+      return;
     }
-    // End of non-fuzzy validation
 
-    // --- API CALL TO LLM for fuzzy matching and conversational responses ---
     try {
       const token = localStorage.getItem('token');
       const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
@@ -353,13 +295,11 @@ const generateTimeOptions = (partOfDay) => {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      // The backend now returns a structured object for item_selection
       if (currentStep === 'item_selection') {
-        const matchResult = response.data; // e.g., { match: "Classic Burger", response: "..." }
+        const matchResult = response.data;
         setChatHistory(prev => [...prev, { role: 'assistant', content: matchResult.response }]);
 
         if (matchResult.match && matchResult.match !== 'None') {
-          // Check if user wants to proceed to delivery details
           if (matchResult.match === 'done') {
             if (cart.length > 0) {
               setCurrentStep('date_selection');
@@ -370,13 +310,11 @@ const generateTimeOptions = (partOfDay) => {
               setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMessage }]);
             }
           } else {
-            // A valid item was matched by the LLM!
             const matchedItem = fullCatalog.find(item => item.item_name === matchResult.match);
             if (matchedItem) {
-              // Check if item already exists in cart
               const existingCartItem = cart.find(item => item.itemName === matchedItem.item_name);
               if (existingCartItem) {
-                const alreadyAddedMessage = `You already have ${existingCartItem.quantity} x ${matchedItem.item_name} in your cart. Would you like to add a different item or type "done" to proceed?`;
+                const alreadyAddedMessage = `You already have ${existingCartItem.quantity} x ${matchedItem.item_name} in your cart. Would you like to add a different item or type \"done\" to proceed?`;
                 setChatHistory(prev => [...prev, { role: 'assistant', content: alreadyAddedMessage }]);
               } else {
                 setCurrentItem({
@@ -384,14 +322,12 @@ const generateTimeOptions = (partOfDay) => {
                   price: matchedItem.price,
                   availableQuantity: matchedItem.available_quantity
                 });
-                setCurrentStep('quantity_selection'); // Move to the next step
+                setCurrentStep('quantity_selection');
               }
             }
           }
         }
-        // If match is 'None', we do nothing, the user stays on item_selection step
       } else {
-        // For other steps, the response is simpler
         const assistantMessage = response.data.response;
         setChatHistory(prev => [...prev, { role: 'assistant', content: assistantMessage }]);
       }
@@ -404,13 +340,10 @@ const generateTimeOptions = (partOfDay) => {
       setIsProcessing(false);
     }
   };
-  // REMOVED onAskQuestion function (no longer used)
 
   const handleKeyPress = (e) => {
-    // We now have a single function to handle sending messages
     if (e.key === 'Enter' && !isProcessing && serverStatus === 'online') {
       if (currentStep === 'summary') {
-        // If user presses Enter on summary, assume they want to submit
         submitOrder();
       } else {
         handleSendMessage();
@@ -418,20 +351,17 @@ const generateTimeOptions = (partOfDay) => {
     }
   };
 
-    // NEW FUNCTION: Submit the order to backend
   const submitOrder = async () => {
     setIsProcessing(true);
-    // Use setChatHistory for user feedback in a chat interface
     setChatHistory(prev => [...prev, { role: 'assistant', content: 'Submitting your order...' }]);
 
     try {
-      // Submit multiple orders (one for each cart item) 
       const token = localStorage.getItem('token');
       const orderPromises = cart.map(async (item) => {
         return axios.post(`${API_BASE_URL}/submit_order`, {
           itemName: item.itemName,
           quantity: item.quantity,
-          price: item.price, // This is price per item
+          price: item.price,
           deliveryDate: orderData.deliveryDate,
           partOfDay: orderData.partOfDay,
           deliveryTime: orderData.deliveryTime,
@@ -442,7 +372,6 @@ const generateTimeOptions = (partOfDay) => {
       
       const responses = await Promise.all(orderPromises);
       
-      // Calculate total price across all orders
       const totalPrice = responses.reduce((sum, response) => {
         return sum + response.data.order.total_price;
       }, 0);
@@ -451,21 +380,18 @@ const generateTimeOptions = (partOfDay) => {
       
       const successMessage = `✅ Orders submitted successfully!\nOrder IDs: ${orderIds.join(', ')}\n\nYour total price is $${totalPrice.toFixed(2)}. Thank you for your order, ${user?.username}!`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
-      setCurrentStep('order_complete'); // Indicate completion
+      setCurrentStep('order_complete');
 
     } catch (error) {
       const errorMessage = `❌ Failed to submit order: ${error.response?.data?.error || error.message}`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
-      // Keep the user on the summary step so they can try again
       setCurrentStep('summary');
     } finally {
       setIsProcessing(false);
     }
   };
 
-    // NEW FUNCTION: Handles the confirmation of the selected time from dropdowns
   const handleTimeConfirmation = async () => {
-    // Basic validation to ensure both dropdowns are selected
     if (!orderData.partOfDay || !orderData.deliveryTime) {
       const timeError = "Please select both a part of the day and a specific time.";
       setChatHistory(prev => [...prev, { role: 'assistant', content: timeError }]);
@@ -473,11 +399,9 @@ const generateTimeOptions = (partOfDay) => {
     }
 
     setIsProcessing(true);
-    // Add user's "action" to chat history for context
     const userActionMessage = `(Selected time: ${orderData.partOfDay} - ${orderData.deliveryTime})`;
     setChatHistory(prev => [...prev, { role: 'user', content: userActionMessage }]);
 
-    // Validation for future time
     const [hourStr, minuteStr] = orderData.deliveryTime.split(':');
     const deliveryDateObj = new Date(orderData.deliveryDate);
     deliveryDateObj.setHours(parseInt(hourStr, 10), parseInt(minuteStr, 10), 0, 0);
@@ -491,10 +415,8 @@ const generateTimeOptions = (partOfDay) => {
       return;
     }
 
-    // If validation passes, move to summary
     setCurrentStep('summary');
     
-    // Create summary of all cart items
     const itemsSummary = cart.map(item => 
       `• ${item.itemName} x${item.quantity} = $${(item.quantity * item.price).toFixed(2)}`
     ).join('\n');
@@ -504,6 +426,32 @@ const generateTimeOptions = (partOfDay) => {
     const summaryMessage = `Great! Here is your order summary:\n\n**Customer:** ${user?.username} (${user?.phone_number})\n\n**Items:**\n${itemsSummary}\n\n**Total Price:** $${totalPrice.toFixed(2)}\n**Delivery:** ${orderData.deliveryDate} during the ${orderData.partOfDay} around ${orderData.deliveryTime}\n\nShall I confirm and place this order for you?`;
     setChatHistory(prev => [...prev, { role: 'assistant', content: summaryMessage }]);
     setIsProcessing(false);
+  };
+
+  const handleIncreaseQuantity = (itemName) => {
+    setCart(prevCart => {
+      return prevCart.map(item => {
+        if (item.itemName === itemName && item.quantity < item.availableQuantity) {
+          return { ...item, quantity: item.quantity + 1 };
+        }
+        return item;
+      });
+    });
+  };
+
+  const handleDecreaseQuantity = (itemName) => {
+    setCart(prevCart => {
+      return prevCart.map(item => {
+        if (item.itemName === itemName && item.quantity > 1) {
+          return { ...item, quantity: item.quantity - 1 };
+        }
+        return item;
+      }).filter(item => item.quantity > 0);
+    });
+  };
+
+  const handleRemoveItem = (itemName) => {
+    setCart(prevCart => prevCart.filter(item => item.itemName !== itemName));
   };
 
   const getServerStatusColor = () => {
@@ -522,7 +470,6 @@ const generateTimeOptions = (partOfDay) => {
     }
   };
 
-  // NEW: Conditional rendering for the main content based on authentication
   if (!isAuthenticated) {
     return (
       <div className="container" style={{ textAlign: 'center', marginTop: '50px' }}>
@@ -547,7 +494,6 @@ const generateTimeOptions = (partOfDay) => {
         </p>
       </div>
 
-      {/* Server Status */}
       <div className="card" style={{ marginBottom: '20px' }}>
         <h2 className="section-title">🔧 Server Status</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
@@ -610,7 +556,7 @@ const generateTimeOptions = (partOfDay) => {
             )}
           </button>
           {files.length > 0 && (
-            <div className="file-info">
+            <div className="file-info" style={{ marginTop: '15px' }}>
               <strong>Selected files:</strong>
               <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
                 {files.map((file, index) => {
@@ -629,7 +575,7 @@ const generateTimeOptions = (partOfDay) => {
             </div>
           )}
           
-          {(isCatalogProcessed || processingStats || currentStep !== 'initial') && ( // Condition for reset button
+          {(isCatalogProcessed || processingStats || currentStep !== 'initial') && (
             <button
               className="reset-button"
               onClick={resetAll}
@@ -641,13 +587,10 @@ const generateTimeOptions = (partOfDay) => {
           )}
         </div>
 
-        {/* NEW: Order Placement Section - REPLACES OLD QUESTION SECTION */}
-                {/* NEW CHAT UI SECTION */}
         <div className="question-section chat-container">
           <h2 className="section-title">🛒 Place Your Order</h2>
           {isCatalogProcessed ? (
             <>
-              {/* Cart Display */}
               {cart.length > 0 && (
                 <div className="cart-display" style={{ 
                   backgroundColor: '#f8f9fa', 
@@ -659,8 +602,15 @@ const generateTimeOptions = (partOfDay) => {
                   <h4 style={{ margin: '0 0 8px 0', color: '#495057', fontSize: '0.9rem' }}>🛒 Current Cart:</h4>
                   <div style={{ fontSize: '0.8rem', color: '#6c757d' }}>
                     {cart.map((item, index) => (
-                      <div key={index} style={{ marginBottom: '4px' }}>
-                        • {item.itemName} x{item.quantity} = ${(item.quantity * item.price).toFixed(2)}
+                      <div key={index} style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>• {item.itemName}</span>
+                        <div>
+                          <button onClick={() => handleDecreaseQuantity(item.itemName)}>-</button>
+                          <span style={{ margin: '0 5px' }}>{item.quantity}</span>
+                          <button onClick={() => handleIncreaseQuantity(item.itemName)}>+</button>
+                          <button onClick={() => handleRemoveItem(item.itemName)} style={{ marginLeft: '10px' }}>Remove</button>
+                        </div>
+                        <span>${(item.quantity * item.price).toFixed(2)}</span>
                       </div>
                     ))}
                     <div style={{ marginTop: '8px', fontWeight: 'bold', borderTop: '1px solid #dee2e6', paddingTop: '4px' }}>
@@ -673,7 +623,6 @@ const generateTimeOptions = (partOfDay) => {
               <div className="chat-history">
                 {chatHistory.map((msg, index) => (
                   <div key={index} className={`chat-message ${msg.role}`}>
-                    {/* A simple way to render markdown-like bold text */}
                     {msg.content.split('**').map((part, i) =>
                       i % 2 === 1 ? <strong key={i}>{part}</strong> : part
                     )}
@@ -686,9 +635,7 @@ const generateTimeOptions = (partOfDay) => {
                 )}
               </div>
 
-              {/* --- CORRECTED INPUT AREA --- */}
-              {/* This entire area appears at the bottom of the chat */}
-              {currentStep !== 'order_complete' && ( // Don't show input area if order is complete
+              {currentStep !== 'order_complete' && (
                 <div className="chat-input-area">
                   {currentStep === 'time_selection' && (
                     <div className="time-selectors">
@@ -713,7 +660,7 @@ const generateTimeOptions = (partOfDay) => {
                           <option key={time} value={time}>{time}</option>
                         ))}
                       </select>
-                      <button className="send-button" onClick={handleTimeConfirmation} disabled={isProcessing}>
+                      <button className="send-button" onClick={handleTimeConfirmation} disabled={isProcessing}> 
                         Confirm
                       </button>
                     </div>
@@ -748,7 +695,7 @@ const generateTimeOptions = (partOfDay) => {
 
                   {currentStep === 'summary' && (
                     <div className="summary-actions">
-                      <button className="confirm-order-button" onClick={submitOrder} disabled={isProcessing}>
+                      <button className="confirm-order-button" onClick={submitOrder} disabled={isProcessing}> 
                         ✔️ Yes, Place Order
                       </button>
                       <button className="reset-button" style={{margin: '0 0 0 10px'}} onClick={resetAll} disabled={isProcessing}>
@@ -763,14 +710,12 @@ const generateTimeOptions = (partOfDay) => {
             <p style={{ color: '#888' }}>Please process a restaurant catalog first to start placing an order.</p>
           )}
         </div>
-        {/* Existing general message display */}
-        {message && currentStep !== 'order_complete' && ( // Only show if not handled by order_complete
+        {message && currentStep !== 'order_complete' && (
           <div className={`message ${messageType}`} style={{ whiteSpace: 'pre-line' }}>
             {message}
           </div>
         )}
 
-        {/* Processing Statistics */}
         {processingStats && (
           <div className="stats-section">
             <h3 style={{ color: '#555', marginBottom: '15px', fontSize: '1.1rem' }}>📊 Processing Statistics</h3>
@@ -780,49 +725,28 @@ const generateTimeOptions = (partOfDay) => {
                 <div className="stat-label">Files Processed</div>
               </div>
               <div className="stat-item">
-                <div className="stat-value">{processingStats.chunks_created}</div> {/* This was chunks_created, but now might be ~chars/1000 */}
-                <div className="stat-label">Characters</div> {/* Label change */}
+                <div className="stat-value">{processingStats.chunks_created}</div>
+                <div className="stat-label">Characters</div>
               </div>
-               <div className="stat-item"> {/* NEW: Total Chars */}
+               <div className="stat-item">
                 <div className="stat-value">{processingStats.total_chars?.toLocaleString()}</div>
                 <div className="stat-label">Total Chars</div>
               </div>
-               <div className="stat-item"> {/* NEW: Catalog Items Count */}
+               <div className="stat-item">
                 <div className="stat-value">{fullCatalog.length}</div>
                 <div className="stat-label">Catalog Items</div>
               </div>
             </div>
           </div>
         )}
-
-        {/* REMOVED: Old answer section (no longer applicable for ordering) */}
-        {/*
-        {answer && (
-          <div className="answer-section">
-            <h3 className="answer-title">💡 Answer:</h3>
-            <p className="answer-text" style={{ whiteSpace: 'pre-line' }}>{answer}</p>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '15px', fontSize: '0.9rem', color: '#666' }}>
-              <div>
-                <strong>Response Length:</strong> {answer.length} characters
-              </div>
-              {lastModel && (
-                <div>
-                  <strong>Model:</strong> {lastModel}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        */}
       </div>
 
       <div className="card" style={{ textAlign: 'center', background: '#f8f9fa' }}>
         <h3 style={{ color: '#666', marginBottom: '10px' }}>How it works:</h3>
         <p style={{ color: '#888', lineHeight: 1.6 }}>
           1. Upload your restaurant catalog (Excel/CSV recommended for structured data).<br />
-          2. Click "Process Catalog" to analyze the menu and stock.<br />
-          3. Follow the prompts to select items, quantities, and delivery details.<br />
+          2. Click "Process Catalog" to analyze the menu and stock.
+          3. Follow the prompts to select items, quantities, and delivery details.
           4. Confirm and place your order!
         </p>
         <div className="capabilities-grid">
