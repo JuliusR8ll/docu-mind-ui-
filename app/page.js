@@ -31,6 +31,8 @@ export default function Home() {
   const [inputError, setInputError] = useState('');
   const [stepMessage, setStepMessage] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
+  const [messageCount, setMessageCount] = useState(0);
+  const MESSAGE_LIMIT = 30;
 
   useEffect(() => {
     checkServerHealth();
@@ -117,6 +119,7 @@ export default function Home() {
       deliveryTime: ''
     });
     setAvailableItems([]);
+    setMessageCount(0);
     setFullCatalog([]);
     setCurrentInput('');
     setInputError('');
@@ -225,8 +228,19 @@ export default function Home() {
     }
   };
   
-  const handleSendMessage = async () => {
+    const handleSendMessage = async () => {
+    // --- NEW: Add this block at the very top of the function ---
+    if (messageCount >= MESSAGE_LIMIT) {
+      setChatHistory(prev => [...prev, { role: 'assistant', content: "You have reached the message limit for this session. Please click 'Start New Order' to begin again." }]);
+      setCurrentStep('order_complete'); // Use a final step to disable the input
+      return; // Stop the function immediately
+    }
+    // --- End of new block ---
+
     if (!currentInput.trim()) return;
+
+    // Increment the counter right after a valid message is sent
+    setMessageCount(prevCount => prevCount + 1); // NEW: Increment the counter
 
     const userInput = currentInput.trim();
     const newChatHistory = [...chatHistory, { role: 'user', content: userInput }];
@@ -351,41 +365,36 @@ export default function Home() {
     }
   };
 
-  const submitOrder = async () => {
+    const submitOrder = async () => {
     setIsProcessing(true);
     setChatHistory(prev => [...prev, { role: 'assistant', content: 'Submitting your order...' }]);
+    setCurrentStep('summary'); // Lock the UI
 
     try {
       const token = localStorage.getItem('token');
-      const orderPromises = cart.map(async (item) => {
-        return axios.post(`${API_BASE_URL}/submit_order`, {
-          itemName: item.itemName,
-          quantity: item.quantity,
-          price: item.price,
-          deliveryDate: orderData.deliveryDate,
-          partOfDay: orderData.partOfDay,
-          deliveryTime: orderData.deliveryTime,
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+      // NEW PAYLOAD: Create a single object with the cart and delivery details
+      const payload = {
+        cart: cart, // The entire cart array
+        deliveryDate: orderData.deliveryDate,
+        partOfDay: orderData.partOfDay,
+        deliveryTime: orderData.deliveryTime,
+      };
+
+      // SINGLE API CALL: Send the payload in one request
+      const response = await axios.post(`${API_BASE_URL}/submit_order`, payload, {
+        headers: { Authorization: `Bearer ${token}` }
       });
       
-      const responses = await Promise.all(orderPromises);
-      
-      const totalPrice = responses.reduce((sum, response) => {
-        return sum + response.data.order.total_price;
-      }, 0);
-      
-      const orderIds = responses.map(response => response.data.order.order_id);
-      
-      const successMessage = `✅ Orders submitted successfully!\nOrder IDs: ${orderIds.join(', ')}\n\nYour total price is $${totalPrice.toFixed(2)}. Thank you for your order, ${user?.username}!`;
+      const successMessage = `✅ Order submitted successfully!\nOrder ID: ${response.data.order.order_id}\n\nYour total price is $${response.data.order.total_price.toFixed(2)}. Thank you for your order, ${user?.username}!`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
       setCurrentStep('order_complete');
+      setCart([]); // Clear cart after successful order
 
     } catch (error) {
       const errorMessage = `❌ Failed to submit order: ${error.response?.data?.error || error.message}`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
-      setCurrentStep('summary');
+      // Revert to a step where the user can try again, e.g., the time selection
+      setCurrentStep('time_selection'); 
     } finally {
       setIsProcessing(false);
     }
