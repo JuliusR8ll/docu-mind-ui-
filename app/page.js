@@ -310,23 +310,67 @@ export default function Home() {
       });
       
       if (currentStep === 'item_selection') {
-        const matchResult = response.data;
-        setChatHistory(prev => [...prev, { role: 'assistant', content: matchResult.response }]);
+        // First, let's see if the user is trying to MODIFY an existing item
+        const isModificationAttempt = cart.some(item => 
+            userInput.toLowerCase().includes(item.itemName.toLowerCase().split(' ')[0]) // Check for words like "burger", "fries"
+        ) && /\d/.test(userInput); // And check if the input contains a number
 
-        if (matchResult.match && matchResult.match !== 'None') {
-          if (matchResult.match === 'done') {
-            if (cart.length > 0) {
-              setCurrentStep('date_selection');
-              const datePrompt = "Perfect! And when would you like your order delivered? (Please enter the date in YYYY-MM-DD format)";
-              setChatHistory(prev => [...prev, { role: 'assistant', content: datePrompt }]);
+        if (isModificationAttempt) {
+            // User is likely trying to change quantity. Let's ask the AI to parse it.
+            const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
+              chatHistory,
+              currentStep: 'modify_quantity', // Use the new backend case
+              availableItems,
+              
+              userInput,
+              cart
+            }, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+            
+            const { item, quantity } = response.data;
+
+            if (item && item !== 'None' && quantity > 0) {
+                const itemInCatalog = fullCatalog.find(i => i.item_name === item);
+                if (quantity > itemInCatalog.available_quantity) {
+                    const quantityError = `Sorry, we only have ${itemInCatalog.available_quantity} of ${item} in stock.`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: quantityError }]);
+                } else {
+                    updateCartItemQuantity(item, quantity);
+                    const successMessage = `Okay, I've updated your cart to ${quantity} x ${item}. Anything else?`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
+                }
             } else {
-              const emptyCartMessage = "You haven't added any items to your cart yet. Please select an item first.";
-              setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMessage }]);
+                const errorMessage = "I'm not sure which item you want to change. Could you be more specific? (e.g., '3 classic burgers')";
+                setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
             }
-          } else {
-            const matchedItem = fullCatalog.find(item => item.item_name === matchResult.match);
-            if (matchedItem) {
-              const existingCartItem = cart.find(item => item.itemName === matchedItem.item_name);
+
+        } else {
+          // This is the ORIGINAL logic for adding a NEW item. It remains unchanged.
+          const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
+            chatHistory,
+            currentStep: 'item_selection',
+            availableItems,
+            userInput
+          }, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+          
+          const matchResult = response.data;
+          setChatHistory(prev => [...prev, { role: 'assistant', content: matchResult.response }]);
+
+          if (matchResult.match && matchResult.match !== 'None') {
+            if (matchResult.match === 'done') {
+              if (cart.length > 0) {
+                setCurrentStep('date_selection');
+                // ... (rest of original logic)
+                const datePrompt = "Perfect! And when would you like your order delivered? (Please enter the date in YYYY-MM-DD format)";
+                setChatHistory(prev => [...prev, { role: 'assistant', content: datePrompt }]);
+              } else {
+                // ... (rest of original logic)
+                const emptyCartMessage = "You haven't added any items to your cart yet. Please select an item first.";
+                setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMessage }]);
+              }
+            } else {
+              const matchedItem = fullCatalog.find(item => item.item_name === matchResult.match);
+              if (matchedItem) {
+                const existingCartItem = cart.find(item => item.itemName === matchedItem.item_name);
               if (existingCartItem) {
                 const alreadyAddedMessage = `You already have ${existingCartItem.quantity} x ${matchedItem.item_name} in your cart. Would you like to add a different item or type \"done\" to proceed?`;
                 setChatHistory(prev => [...prev, { role: 'assistant', content: alreadyAddedMessage }]);
@@ -338,10 +382,14 @@ export default function Home() {
                 });
                 setCurrentStep('quantity_selection');
               }
+              }
             }
           }
         }
-      } else {
+      // --- END OF MODIFIED BLOCK ---
+      }
+
+      else {
         const assistantMessage = response.data.response;
         setChatHistory(prev => [...prev, { role: 'assistant', content: assistantMessage }]);
       }
@@ -456,6 +504,24 @@ export default function Home() {
         }
         return item;
       }).filter(item => item.quantity > 0);
+    });
+  };
+
+    const updateCartItemQuantity = (itemName, newQuantity) => {
+    const itemDetails = fullCatalog.find(i => i.item_name === itemName);
+    if (!itemDetails) return; // Item not found
+
+    setCart(prevCart => {
+      // Use your "remove and re-add" logic
+      const otherItems = prevCart.filter(item => item.itemName !== itemName);
+      
+      if (newQuantity > 0 && newQuantity <= itemDetails.available_quantity) {
+        const updatedItem = { ...itemDetails, itemName: itemDetails.item_name, quantity: newQuantity };
+        return [...otherItems, updatedItem]; // Add the updated item back
+      } else {
+        // If new quantity is 0 or invalid, just return the other items (effectively removing it)
+        return otherItems;
+      }
     });
   };
 
