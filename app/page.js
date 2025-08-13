@@ -251,6 +251,44 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     setIsProcessing(true);
     setInputError('');
 
+    if (currentStep === 'delivery_confirmation') {
+    const affirmative = /^(yes|yeah|yep|yup|confirm|correct|that's right|ok|sounds good)/i;
+    const negative = /^(no|nope|wait|change|wrong|not right)/i;
+
+    if (affirmative.test(userInput)) {
+      // --- USER CONFIRMED ---
+      // Move to the final summary step
+      setCurrentStep('summary');
+
+      // Build and display the full order summary
+      const itemsSummary = cart.map(item =>
+        `• ${item.itemName} x${item.quantity} = $${(item.quantity * item.price).toFixed(2)}`
+      ).join('\n');
+      const totalPrice = cart.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const summaryMessage = `Great! Here is your order summary:\n\n**Customer:** ${user?.username} (${user?.phone_number})\n\n**Items:**\n${itemsSummary}\n\n**Total Price:** $${totalPrice.toFixed(2)}\n**Delivery:** ${orderData.deliveryDate} at ${orderData.deliveryTime}\n\nShall I confirm and place this order for you?`;
+      
+      setChatHistory(prev => [...prev, { role: 'assistant', content: summaryMessage }]);
+      
+    } else if (negative.test(userInput)) {
+      // --- USER WANTS TO CHANGE ---
+      // Reset delivery data and go back to the date selection step
+      setOrderData({ deliveryDate: '', partOfDay: '', deliveryTime: '' });
+      setBookingDayOfWeek('');
+      setCurrentStep('date_selection');
+
+      const restartMessage = "No problem at all. Let's start over with the delivery details. When would you like to schedule your delivery? (Please enter a date)";
+      setChatHistory(prev => [...prev, { role: 'assistant', content: restartMessage }]);
+
+    } else {
+      // --- USER'S RESPONSE WAS UNCLEAR ---
+      const unclearMessage = "Sorry, I didn't understand. Please respond with 'yes' to confirm the delivery details or 'no' to change them.";
+      setChatHistory(prev => [...prev, { role: 'assistant', content: unclearMessage }]);
+    }
+    
+    setIsProcessing(false);
+    return; // Stop the function here
+  }
+
     if (currentStep === 'quantity_selection') {
       const quantity = parseInt(userInput, 10);
       if (isNaN(quantity) || quantity <= 0 || quantity > currentItem.availableQuantity) {
@@ -433,6 +471,8 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
 
   // Add this new function inside your Home component
 
+// REPLACE your old handleTimeValidation function with this one
+
 const handleTimeValidation = async (selectedTime) => {
   if (!selectedTime) return;
 
@@ -440,10 +480,9 @@ const handleTimeValidation = async (selectedTime) => {
 
   try {
     const token = localStorage.getItem('token');
-    // Call the NEW backend endpoint for time validation
     const response = await axios.post(`${API_BASE_URL}/validate_delivery_time`, {
       time: selectedTime,
-      dayOfWeek: bookingDayOfWeek // Use the day we saved earlier
+      dayOfWeek: bookingDayOfWeek
     }, {
       headers: { Authorization: `Bearer ${token}` }
     });
@@ -452,26 +491,21 @@ const handleTimeValidation = async (selectedTime) => {
 
     if (validationResult.isValid) {
       // --- THE TIME IS VALID ---
-      // 1. Update the order state with the final time
+      // 1. Update the state with the selected time
       setOrderData(prev => ({ ...prev, deliveryTime: selectedTime }));
 
-      // 2. Move to the final summary step
-      setCurrentStep('summary');
+      // 2. MOVE TO THE NEW "delivery_confirmation" STEP
+      setCurrentStep('delivery_confirmation');
 
-      // 3. Build and display the order summary message (this logic is moved from the old function)
-      const itemsSummary = cart.map(item =>
-        `• ${item.itemName} x${item.quantity} = $${(item.quantity * item.price).toFixed(2)}`
-      ).join('\n');
-      const totalPrice = cart.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-      const summaryMessage = `Great! Here is your order summary:\n\n**Customer:** ${user?.username} (${user?.phone_number})\n\n**Items:**\n${itemsSummary}\n\n**Total Price:** $${totalPrice.toFixed(2)}\n**Delivery:** ${orderData.deliveryDate} during the ${orderData.partOfDay} around ${selectedTime}\n\nShall I confirm and place this order for you?`;
+      // 3. ASK THE USER FOR FINAL CONFIRMATION
+      const confirmationPrompt = `Perfect. Just to confirm, you'd like your delivery on **${orderData.deliveryDate}** at **${selectedTime}**. Is that correct? (Type 'yes' or 'no')`;
       
-      setChatHistory(prev => [...prev, { role: 'user', content: `(Selected time: ${selectedTime})` }, { role: 'assistant', content: summaryMessage }]);
+      // We add the user's "action" message for context, then the bot's question
+      setChatHistory(prev => [...prev, { role: 'user', content: `(Selected time: ${selectedTime})` }, { role: 'assistant', content: confirmationPrompt }]);
       
     } else {
-      // --- THE TIME IS INVALID ---
-      // Show the specific error message from the backend
+      // --- THE TIME IS INVALID (This part remains the same) ---
       setChatHistory(prev => [...prev, { role: 'user', content: `(Selected time: ${selectedTime})` }, { role: 'assistant', content: validationResult.message }]);
-      // DO NOT change the step. The user remains on 'time_selection' to try again.
     }
 
   } catch (error) {
@@ -559,6 +593,8 @@ const handleDateValidation = async (selectedDate) => {
       // 3. Give the user a confirmation and the next instruction
       const timePrompt = `Great, ${selectedDate} is available! Now please select a part of the day and a specific time for your delivery.`;
       setChatHistory(prev => [...prev, { role: 'assistant', content: timePrompt }]);
+
+      setCurrentInput('');
 
     } else {
       // --- THE DATE IS INVALID ---
@@ -800,30 +836,32 @@ const handleDateValidation = async (selectedDate) => {
                           </div>
                         )}
 
-                  {['item_selection', 'quantity_selection'].includes(currentStep) && (
-                    <>
-                      {/* This input is for the item and quantity steps, which need the "Send" button */}
-                      <input
-                        type={currentStep === 'quantity_selection' ? 'number' : 'text'}
-                        value={currentInput}
-                        onChange={(e) => setCurrentInput(e.target.value)}
-                        onKeyPress={handleKeyPress}
-                        placeholder={
-                          currentStep === 'item_selection' ? (cart.length > 0 ? 'Add another item or type "done"...' : 'Type an item name...') :
-                          currentStep === 'quantity_selection' ? 'Enter quantity...' : ''
-                        }
-                        disabled={isProcessing || serverStatus !== 'online'}
-                        className="chat-input"
-                      />
-                      <button
-                        className="send-button"
-                        onClick={handleSendMessage}
-                        disabled={isProcessing || serverStatus !== 'online'}
-                      >
-                        Send
-                      </button>
-                    </>
-                  )}
+                        {['item_selection', 'quantity_selection', 'delivery_confirmation'].includes(currentStep) && (
+                          <>
+                            {/* This input is for the item, quantity, AND NEW confirmation steps */}
+                            <input
+                              type={currentStep === 'quantity_selection' ? 'number' : 'text'}
+                              value={currentInput}
+                              onChange={(e) => setCurrentInput(e.target.value)}
+                              onKeyPress={handleKeyPress}
+                              placeholder={
+                                // Add a new placeholder for the confirmation step
+                                currentStep === 'delivery_confirmation' ? "Type 'yes' or 'no'..." :
+                                currentStep === 'item_selection' ? (cart.length > 0 ? 'Add another item or type "done"...' : 'Type an item name...') :
+                                currentStep === 'quantity_selection' ? 'Enter quantity...' : ''
+                              }
+                              disabled={isProcessing || serverStatus !== 'online'}
+                              className="chat-input"
+                            />
+                            <button
+                              className="send-button"
+                              onClick={handleSendMessage}
+                              disabled={isProcessing || serverStatus !== 'online'}
+                            >
+                              Send
+                            </button>
+                          </>
+                        )}
 
                   {/* --- THIS IS THE NEW, SEPARATE LOGIC FOR THE DATE STEP --- */}
                   {currentStep === 'date_selection' && (
