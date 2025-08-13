@@ -615,8 +615,10 @@ const handleDateValidation = async (selectedDate) => {
   }
 };
 
-  const handleRemoveItem = (itemName) => {
-    setCart(prevCart => prevCart.filter(item => item.itemName !== itemName));
+  const cancelOrder = () => {
+    const cancelMessage = "Your order has been cancelled. You can continue adding items to your cart.";
+    setChatHistory(prev => [...prev, { role: 'assistant', content: cancelMessage }]);
+    setCurrentStep('item_selection');
   };
 
   const getServerStatusColor = () => {
@@ -888,7 +890,7 @@ const handleDateValidation = async (selectedDate) => {
                       <button className="confirm-order-button" onClick={submitOrder} disabled={isProcessing}> 
                         ✔️ Yes, Place Order
                       </button>
-                      <button className="reset-button" style={{margin: '0 0 0 10px'}} onClick={resetAll} disabled={isProcessing}>
+                      <button className="reset-button" style={{margin: '0 0 0 10px'}} onClick={cancelOrder} disabled={isProcessing}>
                         ❌ No, Cancel
                       </button>
                     </div>
