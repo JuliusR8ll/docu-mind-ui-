@@ -20,6 +20,8 @@ export default function Home() {
   const [currentStep, setCurrentStep] = useState('initial');
   const [cart, setCart] = useState([]);
   const [currentItem, setCurrentItem] = useState(null);
+  // Add this new state variable
+const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
   const [orderData, setOrderData] = useState({
     deliveryDate: '',
     partOfDay: '',
@@ -279,25 +281,6 @@ export default function Home() {
       return;
     }
 
-    if (currentStep === 'date_selection') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const selectedDate = new Date(userInput);
-      selectedDate.setHours(0, 0, 0, 0);
-      if (isNaN(selectedDate.getTime()) || selectedDate < today) {
-        const dateError = "That doesn't seem to be a valid future date. Please enter a date in YYYY-MM-DD format, for today or later.";
-        setChatHistory(prev => [...prev, { role: 'assistant', content: dateError }]);
-        setIsProcessing(false);
-        return;
-      }
-      setOrderData(prev => ({ ...prev, deliveryDate: userInput, partOfDay: '', deliveryTime: '' }));
-      setCurrentStep('time_selection');
-      const timePrompt = "Excellent. Now please select a part of the day and a specific time for your delivery.";
-      setChatHistory(prev => [...prev, { role: 'assistant', content: timePrompt }]);
-      setIsProcessing(false);
-      return;
-    }
-
     try {
       const token = localStorage.getItem('token');
       const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
@@ -448,42 +431,56 @@ export default function Home() {
     }
   };
 
-  const handleTimeConfirmation = async () => {
-    if (!orderData.partOfDay || !orderData.deliveryTime) {
-      const timeError = "Please select both a part of the day and a specific time.";
-      setChatHistory(prev => [...prev, { role: 'assistant', content: timeError }]);
-      return;
+  // Add this new function inside your Home component
+
+const handleTimeValidation = async (selectedTime) => {
+  if (!selectedTime) return;
+
+  setIsProcessing(true);
+
+  try {
+    const token = localStorage.getItem('token');
+    // Call the NEW backend endpoint for time validation
+    const response = await axios.post(`${API_BASE_URL}/validate_delivery_time`, {
+      time: selectedTime,
+      dayOfWeek: bookingDayOfWeek // Use the day we saved earlier
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const validationResult = response.data;
+
+    if (validationResult.isValid) {
+      // --- THE TIME IS VALID ---
+      // 1. Update the order state with the final time
+      setOrderData(prev => ({ ...prev, deliveryTime: selectedTime }));
+
+      // 2. Move to the final summary step
+      setCurrentStep('summary');
+
+      // 3. Build and display the order summary message (this logic is moved from the old function)
+      const itemsSummary = cart.map(item =>
+        `• ${item.itemName} x${item.quantity} = $${(item.quantity * item.price).toFixed(2)}`
+      ).join('\n');
+      const totalPrice = cart.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const summaryMessage = `Great! Here is your order summary:\n\n**Customer:** ${user?.username} (${user?.phone_number})\n\n**Items:**\n${itemsSummary}\n\n**Total Price:** $${totalPrice.toFixed(2)}\n**Delivery:** ${orderData.deliveryDate} during the ${orderData.partOfDay} around ${selectedTime}\n\nShall I confirm and place this order for you?`;
+      
+      setChatHistory(prev => [...prev, { role: 'user', content: `(Selected time: ${selectedTime})` }, { role: 'assistant', content: summaryMessage }]);
+      
+    } else {
+      // --- THE TIME IS INVALID ---
+      // Show the specific error message from the backend
+      setChatHistory(prev => [...prev, { role: 'user', content: `(Selected time: ${selectedTime})` }, { role: 'assistant', content: validationResult.message }]);
+      // DO NOT change the step. The user remains on 'time_selection' to try again.
     }
 
-    setIsProcessing(true);
-    const userActionMessage = `(Selected time: ${orderData.partOfDay} - ${orderData.deliveryTime})`;
-    setChatHistory(prev => [...prev, { role: 'user', content: userActionMessage }]);
-
-    const [hourStr, minuteStr] = orderData.deliveryTime.split(':');
-    const deliveryDateObj = new Date(orderData.deliveryDate);
-    deliveryDateObj.setHours(parseInt(hourStr, 10), parseInt(minuteStr, 10), 0, 0);
-    const nowPlusOneHour = new Date(new Date().getTime() + 60 * 60 * 1000);
-    const isTodayDelivery = (deliveryDateObj.toDateString() === new Date().toDateString());
-
-    if (isTodayDelivery && deliveryDateObj < nowPlusOneHour) {
-      const timeError = `For today's delivery, please select a time at least 1 hour from now.`;
-      setChatHistory(prev => [...prev, { role: 'assistant', content: timeError }]);
-      setIsProcessing(false);
-      return;
-    }
-
-    setCurrentStep('summary');
-    
-    const itemsSummary = cart.map(item => 
-      `• ${item.itemName} x${item.quantity} = $${(item.quantity * item.price).toFixed(2)}`
-    ).join('\n');
-    
-    const totalPrice = cart.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    
-    const summaryMessage = `Great! Here is your order summary:\n\n**Customer:** ${user?.username} (${user?.phone_number})\n\n**Items:**\n${itemsSummary}\n\n**Total Price:** $${totalPrice.toFixed(2)}\n**Delivery:** ${orderData.deliveryDate} during the ${orderData.partOfDay} around ${orderData.deliveryTime}\n\nShall I confirm and place this order for you?`;
-    setChatHistory(prev => [...prev, { role: 'assistant', content: summaryMessage }]);
+  } catch (error) {
+    const errorMessage = "Sorry, I couldn't check that time. Please try again.";
+    setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
+  } finally {
     setIsProcessing(false);
-  };
+  }
+};
 
   const handleIncreaseQuantity = (itemName) => {
     setCart(prevCart => {
@@ -524,6 +521,63 @@ export default function Home() {
       }
     });
   };
+
+  // Add this new function inside your Home component
+
+const handleDateValidation = async (selectedDate) => {
+  // If no date is selected, do nothing.
+  if (!selectedDate) return;
+
+  setIsProcessing(true);
+  setInputError(''); // Clear previous errors
+
+  // Add a user message to show what's happening
+  const newChatHistory = [...chatHistory, { role: 'user', content: `(Checking availability for date: ${selectedDate})` }];
+  setChatHistory(newChatHistory);
+  
+  try {
+    const token = localStorage.getItem('token');
+    // Call the NEW backend endpoint
+    const response = await axios.post(`${API_BASE_URL}/validate_delivery_date`, {
+      date: selectedDate
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const validationResult = response.data;
+
+    if (validationResult.isValid) {
+      // --- THE DATE IS VALID ---
+      // 1. Update the order state with the valid date
+      setOrderData(prev => ({ ...prev, deliveryDate: selectedDate, partOfDay: '', deliveryTime: '' }));
+      
+      setBookingDayOfWeek(validationResult.dayOfWeek);
+
+      // 2. Move to the next step
+      setCurrentStep('time_selection');
+      
+      // 3. Give the user a confirmation and the next instruction
+      const timePrompt = `Great, ${selectedDate} is available! Now please select a part of the day and a specific time for your delivery.`;
+      setChatHistory(prev => [...prev, { role: 'assistant', content: timePrompt }]);
+
+    } else {
+      // --- THE DATE IS INVALID ---
+      // 1. Show the specific error message from the backend
+      const dateError = validationResult.message;
+      setChatHistory(prev => [...prev, { role: 'assistant', content: dateError }]);
+      
+      // 2. DO NOT change the step. The user remains on 'date_selection' to try again.
+      // Optional: Clear the invalid date from the input field
+      setCurrentInput('');
+    }
+
+  } catch (error) {
+    const errorMessage = "Sorry, I couldn't check that date. Please ensure the server is running and try again.";
+    setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
+  } finally {
+    setIsProcessing(false);
+  }
+};
 
   const handleRemoveItem = (itemName) => {
     setCart(prevCart => prevCart.filter(item => item.itemName !== itemName));
@@ -712,42 +766,45 @@ export default function Home() {
 
               {currentStep !== 'order_complete' && (
                 <div className="chat-input-area">
-                  {currentStep === 'time_selection' && (
-                    <div className="time-selectors">
-                      <select
-                        value={orderData.partOfDay}
-                        onChange={(e) => setOrderData(prev => ({ ...prev, partOfDay: e.target.value, deliveryTime: '' }))}
-                        className="chat-select"
-                      >
-                        <option value="">-- Part of Day --</option>
-                        <option value="Morning">Morning (8 AM - 12 PM)</option>
-                        <option value="Afternoon">Afternoon (12 PM - 5 PM)</option>
-                        <option value="Evening">Evening (5 PM - 9 PM)</option>
-                      </select>
-                      <select
-                        value={orderData.deliveryTime}
-                        onChange={(e) => setOrderData(prev => ({ ...prev, deliveryTime: e.target.value }))}
-                        className="chat-select"
-                        disabled={!orderData.partOfDay}
-                      >
-                        <option value="">-- Time --</option>
-                        {generateTimeOptions(orderData.partOfDay).map(time => (
-                          <option key={time} value={time}>{time}</option>
-                        ))}
-                      </select>
-                      <button className="send-button" onClick={handleTimeConfirmation} disabled={isProcessing}> 
-                        Confirm
-                      </button>
-                    </div>
-                  )}
 
-                  {['item_selection', 'quantity_selection', 'date_selection'].includes(currentStep) && (
+                    {currentStep === 'time_selection' && (
+                          <div className="time-selectors">
+                            <select
+                              value={orderData.partOfDay}
+                              onChange={(e) => setOrderData(prev => ({ ...prev, partOfDay: e.target.value, deliveryTime: '' }))}
+                              className="chat-select"
+                            >
+                              <option value="">-- Part of Day --</option>
+                              <option value="Morning">Morning (8 AM - 12 PM)</option>
+                              <option value="Afternoon">Afternoon (12 PM - 5 PM)</option>
+                              <option value="Evening">Evening (5 PM - 9 PM)</option>
+                            </select>
+                            
+                            <select
+                              value={orderData.deliveryTime}
+                              className="chat-select"
+                              disabled={!orderData.partOfDay}
+                              // This is the most important change: onChange now triggers the validation automatically!
+                              onChange={(e) => {
+                                // We still update the state visually, but then immediately validate.
+                                setOrderData(prev => ({ ...prev, deliveryTime: e.target.value }));
+                                handleTimeValidation(e.target.value);
+                              }}
+                            >
+                              <option value="">-- Time --</option>
+                              {generateTimeOptions(orderData.partOfDay).map(time => (
+                                <option key={time} value={time}>{time}</option>
+                              ))}
+                            </select>
+                        
+                          </div>
+                        )}
+
+                  {['item_selection', 'quantity_selection'].includes(currentStep) && (
                     <>
+                      {/* This input is for the item and quantity steps, which need the "Send" button */}
                       <input
-                        type={
-                          currentStep === 'quantity_selection' ? 'number' :
-                          currentStep === 'date_selection' ? 'date' : 'text'
-                        }
+                        type={currentStep === 'quantity_selection' ? 'number' : 'text'}
                         value={currentInput}
                         onChange={(e) => setCurrentInput(e.target.value)}
                         onKeyPress={handleKeyPress}
@@ -765,6 +822,26 @@ export default function Home() {
                       >
                         Send
                       </button>
+                    </>
+                  )}
+
+                  {/* --- THIS IS THE NEW, SEPARATE LOGIC FOR THE DATE STEP --- */}
+                  {currentStep === 'date_selection' && (
+                    <>
+                      <input
+                        type="date"
+                        className="chat-input"
+                        value={currentInput}
+                        disabled={isProcessing || serverStatus !== 'online'}
+                        // This is the most important change: onChange now triggers the validation automatically!
+                        onChange={(e) => {
+                          setCurrentInput(e.target.value); // Update the visual input
+                          handleDateValidation(e.target.value); // Immediately call the validation function
+                        }}
+                        // This is a helpful addition to prevent users from picking past dates
+                        min={new Date().toISOString().split('T')[0]}
+                      />
+                      {/* Notice there is NO "Send" button here, because the action is automatic. */}
                     </>
                   )}
 
