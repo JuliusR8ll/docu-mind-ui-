@@ -752,7 +752,7 @@ const handleDateValidation = async (selectedDate) => {
               <div className="chat-history">
                 {chatHistory.map((msg, index) => (
                   <div key={index} className={`chat-message ${msg.role}`}>
-                    {msg.content.split('**').map((part, i) =>
+                    {typeof msg.content === 'string' && msg.content.split('**').map((part, i) =>
                       i % 2 === 1 ? <strong key={i}>{part}</strong> : part
                     )}
                   </div>
