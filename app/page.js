@@ -538,6 +538,10 @@ const handleTimeValidation = async (selectedTime) => {
     });
   };
 
+const handleRemoveItem = (itemName) => {
+  setCart(prevCart => prevCart.filter(item => item.itemName !== itemName));
+};
+
     const updateCartItemQuantity = (itemName, newQuantity) => {
     const itemDetails = fullCatalog.find(i => i.item_name === itemName);
     if (!itemDetails) return; // Item not found
