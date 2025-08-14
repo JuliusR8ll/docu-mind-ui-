@@ -21,6 +21,8 @@ export default function Home() {
   const [cart, setCart] = useState([]);
   const [currentItem, setCurrentItem] = useState(null);
   // Add this new state variable
+const [itemPendingRemoval, setItemPendingRemoval] = useState(null);
+  // Add this new state variable
 const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
   const [orderData, setOrderData] = useState({
     deliveryDate: '',
@@ -289,6 +291,40 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     return; // Stop the function here
   }
 
+   if (currentStep === 'confirm_remove_item') {
+    const affirmative = /^(yes|yep|confirm|correct)/i;
+    if (affirmative.test(userInput)) {
+      handleRemoveItem(itemPendingRemoval); // This calls the function for the UI button
+      const successMessage = `Okay, I've removed ${itemPendingRemoval} from your cart. Anything else you need?`;
+      setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
+    } else {
+      const cancelMessage = "Okay, cancelled that request. The item is still in your cart.";
+      setChatHistory(prev => [...prev, { role: 'assistant', content: cancelMessage }]);
+    }
+    setItemPendingRemoval(null); // Clear the pending item
+    setCurrentStep('item_selection'); // Go back to the main ordering step
+    setIsProcessing(false);
+    return;
+  }
+
+  // ===================================================================
+  // NEW LOGIC FOR "CONFIRM CLEAR CART"
+  // ===================================================================
+  if (currentStep === 'confirm_clear_cart') {
+    const affirmative = /^(yes|yep|confirm|correct)/i;
+    if (affirmative.test(userInput)) {
+      setCart([]); // Empty the cart
+      const successMessage = "Your cart has been cleared. Let's start over. What would you like to order?";
+      setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
+    } else {
+      const cancelMessage = "Okay, cancelled. Your cart remains as it was.";
+      setChatHistory(prev => [...prev, { role: 'assistant', content: cancelMessage }]);
+    }
+    setCurrentStep('item_selection'); // Go back to the main ordering step
+    setIsProcessing(false);
+    return;
+  }
+
     if (currentStep === 'quantity_selection') {
       const quantity = parseInt(userInput, 10);
       if (isNaN(quantity) || quantity <= 0 || quantity > currentItem.availableQuantity) {
@@ -325,90 +361,75 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
         chatHistory: newChatHistory,
         currentStep: currentStep,
         availableItems: availableItems,
-        userInput: userInput
+        userInput: userInput,
+        cart: cart
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      if (currentStep === 'item_selection') {
-        // First, let's see if the user is trying to MODIFY an existing item
-        const isModificationAttempt = cart.some(item => 
-            userInput.toLowerCase().includes(item.itemName.toLowerCase().split(' ')[0]) // Check for words like "burger", "fries"
-        ) && /\d/.test(userInput); // And check if the input contains a number
+      // ... inside the try { } block of handleSendMessage
 
-        if (isModificationAttempt) {
-            // User is likely trying to change quantity. Let's ask the AI to parse it.
-            const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
-              chatHistory,
-              currentStep: 'modify_quantity', // Use the new backend case
-              availableItems,
-              
-              userInput,
-              cart
-            }, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
-            
-            const { item, quantity } = response.data;
+if (currentStep === 'item_selection') {
+    // This is the main call to the AI hub
+    const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
+        chatHistory: newChatHistory,
+        currentStep: 'item_selection',
+        availableItems,
+        userInput,
+        cart: cart // FIX: Send the cart so the AI knows what can be removed
+    }, { headers: { Authorization: `Bearer ${token}` } });
+    
+    const actionResult = response.data;
+    // Always add the bot's raw response to the chat first
+    setChatHistory(prev => [...prev, { role: 'assistant', content: actionResult.response }]);
 
-            if (item && item !== 'None' && quantity > 0) {
-                const itemInCatalog = fullCatalog.find(i => i.item_name === item);
-                if (quantity > itemInCatalog.available_quantity) {
-                    const quantityError = `Sorry, we only have ${itemInCatalog.available_quantity} of ${item} in stock.`;
-                    setChatHistory(prev => [...prev, { role: 'assistant', content: quantityError }]);
+    // Use a switch to handle the different actions cleanly
+    switch (actionResult.action) {
+        case 'add_item':
+            const matchedItem = fullCatalog.find(item => item.item_name === actionResult.item_name);
+            if (matchedItem) {
+                if (cart.find(item => item.itemName === matchedItem.item_name)) {
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: `You already have that in your cart. You can change its quantity later.` }]);
                 } else {
-                    updateCartItemQuantity(item, quantity);
-                    const successMessage = `Okay, I've updated your cart to ${quantity} x ${item}. Anything else?`;
-                    setChatHistory(prev => [...prev, { role: 'assistant', content: successMessage }]);
+                    setCurrentItem({
+                        itemName: matchedItem.item_name,
+                        price: matchedItem.price,
+                        availableQuantity: matchedItem.available_quantity
+                    });
+                    setCurrentStep('quantity_selection');
                 }
-            } else {
-                const errorMessage = "I'm not sure which item you want to change. Could you be more specific? (e.g., '3 classic burgers')";
-                setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
             }
+            break;
 
-        } else {
-          // This is the ORIGINAL logic for adding a NEW item. It remains unchanged.
-          const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
-            chatHistory,
-            currentStep: 'item_selection',
-            availableItems,
-            userInput
-          }, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
-          
-          const matchResult = response.data;
-          setChatHistory(prev => [...prev, { role: 'assistant', content: matchResult.response }]);
+        case 'remove_item':
+            // The AI identified an item to remove. Ask for confirmation.
+            setItemPendingRemoval(actionResult.item_name);
+            setCurrentStep('confirm_remove_item');
+            break;
+            
+        case 'clear_cart':
+            // The AI detected a request to clear the cart. Ask for confirmation.
+            setCurrentStep('confirm_clear_cart');
+            break;
 
-          if (matchResult.match && matchResult.match !== 'None') {
-            if (matchResult.match === 'done') {
-              if (cart.length > 0) {
+        case 'proceed_to_checkout':
+            if (cart.length > 0) {
                 setCurrentStep('date_selection');
-                // ... (rest of original logic)
-                const datePrompt = "Perfect! And when would you like your order delivered? (Please enter the date in YYYY-MM-DD format)";
+                const datePrompt = "Perfect! And when would you like your order delivered? (Please select a date)";
                 setChatHistory(prev => [...prev, { role: 'assistant', content: datePrompt }]);
-              } else {
-                // ... (rest of original logic)
+            } else {
                 const emptyCartMessage = "You haven't added any items to your cart yet. Please select an item first.";
                 setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMessage }]);
-              }
-            } else {
-              const matchedItem = fullCatalog.find(item => item.item_name === matchResult.match);
-              if (matchedItem) {
-                const existingCartItem = cart.find(item => item.itemName === matchedItem.item_name);
-              if (existingCartItem) {
-                const alreadyAddedMessage = `You already have ${existingCartItem.quantity} x ${matchedItem.item_name} in your cart. Would you like to add a different item or type \"done\" to proceed?`;
-                setChatHistory(prev => [...prev, { role: 'assistant', content: alreadyAddedMessage }]);
-              } else {
-                setCurrentItem({
-                  itemName: matchedItem.item_name,
-                  price: matchedItem.price,
-                  availableQuantity: matchedItem.available_quantity
-                });
-                setCurrentStep('quantity_selection');
-              }
-              }
             }
-          }
-        }
-      // --- END OF MODIFIED BLOCK ---
-      }
+            break;
+            
+        case 'no_match':
+        default:
+            // Do nothing, the bot's response is already in the chat
+            break;
+    }
+}
+// ... the rest of the try block continues here
 
       else {
         const assistantMessage = response.data.response;
@@ -477,6 +498,8 @@ const handleTimeValidation = async (selectedTime) => {
   if (!selectedTime) return;
 
   setIsProcessing(true);
+
+  console.log("VALIDATING TIME for day:", bookingDayOfWeek); 
 
   try {
     const token = localStorage.getItem('token');
@@ -842,7 +865,7 @@ const handleDateValidation = async (selectedDate) => {
                           </div>
                         )}
 
-                        {['item_selection', 'quantity_selection', 'delivery_confirmation'].includes(currentStep) && (
+                        {['item_selection', 'quantity_selection', 'delivery_confirmation', 'confirm_remove_item', 'confirm_clear_cart'].includes(currentStep) && (
                           <>
                             {/* This input is for the item, quantity, AND NEW confirmation steps */}
                             <input
@@ -853,6 +876,8 @@ const handleDateValidation = async (selectedDate) => {
                               placeholder={
                                 // Add a new placeholder for the confirmation step
                                 currentStep === 'delivery_confirmation' ? "Type 'yes' or 'no'..." :
+                                currentStep === 'confirm_remove_item' ? "Type 'yes' to confirm removal..." :
+                                currentStep === 'confirm_clear_cart' ? "Type 'yes' to clear cart..." :
                                 currentStep === 'item_selection' ? (cart.length > 0 ? 'Add another item or type "done"...' : 'Type an item name...') :
                                 currentStep === 'quantity_selection' ? 'Enter quantity...' : ''
                               }
