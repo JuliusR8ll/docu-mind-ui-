@@ -37,6 +37,7 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
   const [messageCount, setMessageCount] = useState(0);
   const MESSAGE_LIMIT = 30;
+  const WARNING_THRESHOLD = MESSAGE_LIMIT - 5;
 
   useEffect(() => {
     checkServerHealth();
@@ -232,7 +233,7 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     }
   };
   
-    const handleSendMessage = async () => {
+  const handleSendMessage = async () => {
     // --- NEW: Add this block at the very top of the function ---
     if (messageCount >= MESSAGE_LIMIT) {
       setChatHistory(prev => [...prev, { role: 'assistant', content: "You have reached the message limit for this session. Please click 'Start New Order' to begin again." }]);
@@ -244,7 +245,8 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     if (!currentInput.trim()) return;
 
     // Increment the counter right after a valid message is sent
-    setMessageCount(prevCount => prevCount + 1); // NEW: Increment the counter
+    const nextMessageCount = messageCount + 1;
+    setMessageCount(nextMessageCount);
 
     const userInput = currentInput.trim();
     const newChatHistory = [...chatHistory, { role: 'user', content: userInput }];
@@ -466,6 +468,15 @@ if (currentStep === 'item_selection') {
       setChatHistory(prev => [...prev, { role: 'assistant', content: errorMessage }]);
     } finally {
       setIsProcessing(false);
+      if (nextMessageCount === WARNING_THRESHOLD) {
+    // We use a small timeout to make the warning appear as a separate, follow-up message.
+        setTimeout(() => {
+          const messagesRemaining = MESSAGE_LIMIT - nextMessageCount;
+          const warningMessage = `(You have ${messagesRemaining} messages remaining in this session.)`;
+          // Append the warning to the chat history
+          setChatHistory(prev => [...prev, { role: 'assistant', content: warningMessage }]);
+        }, 500); // 0.5 second delay
+      }
     }
   };
 
