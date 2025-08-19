@@ -370,62 +370,86 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
       // ... inside the try { } block of handleSendMessage
 
 if (currentStep === 'item_selection') {
-    // This is the main call to the AI hub
     const response = await axios.post(`${API_BASE_URL}/conversational_order`, {
-        chatHistory: newChatHistory,
+        chatHistory,
         currentStep: 'item_selection',
         availableItems,
         userInput,
-        cart: cart // FIX: Send the cart so the AI knows what can be removed
-    }, { headers: { Authorization: `Bearer ${token}` } });
-    
-    const actionResult = response.data;
-    // Always add the bot's raw response to the chat first
-    setChatHistory(prev => [...prev, { role: 'assistant', content: actionResult.response }]);
+        cart
+    }, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
 
-    // Use a switch to handle the different actions cleanly
+    const actionResult = response.data;
+
     switch (actionResult.action) {
         case 'add_item':
             const matchedItem = fullCatalog.find(item => item.item_name === actionResult.item_name);
             if (matchedItem) {
                 if (cart.find(item => item.itemName === matchedItem.item_name)) {
-                    setChatHistory(prev => [...prev, { role: 'assistant', content: `You already have that in your cart. You can change its quantity later.` }]);
+                    // Item is already in the cart. Ask if they want to modify it.
+                    const alreadyExistsMsg = `You already have ${actionResult.item_name} in your cart. Did you want to change the quantity?`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: alreadyExistsMsg }]);
                 } else {
-                    setCurrentItem({
-                        itemName: matchedItem.item_name,
-                        price: matchedItem.price,
-                        availableQuantity: matchedItem.available_quantity
-                    });
+                    // New item. Ask for quantity.
+                    const askQuantityMsg = `${actionResult.item_name}, great choice! How many would you like?`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: askQuantityMsg }]);
+                    setCurrentItem({ itemName: matchedItem.item_name, price: matchedItem.price, availableQuantity: matchedItem.available_quantity });
                     setCurrentStep('quantity_selection');
                 }
+            } else {
+                 // AI hallucinated an item that doesn't exist.
+                const noMatchMsg = `Sorry, I couldn't find "${actionResult.item_name}" on our menu.`;
+                setChatHistory(prev => [...prev, { role: 'assistant', content: noMatchMsg }]);
+            }
+            break;
+
+        case 'modify_item':
+            const itemToUpdate = fullCatalog.find(i => i.item_name === actionResult.item_name);
+            if (itemToUpdate && actionResult.quantity > 0) {
+                if (actionResult.quantity > itemToUpdate.available_quantity) {
+                    const quantityErrorMsg = `Sorry, we only have ${itemToUpdate.available_quantity} of that in stock.`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: quantityErrorMsg }]);
+                } else {
+                    updateCartItemQuantity(actionResult.item_name, actionResult.quantity);
+                    const successMsg = `Okay, I've updated your cart to ${actionResult.quantity} x ${actionResult.item_name}. Anything else?`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: successMsg }]);
+                }
+            } else {
+                // AI failed to parse correctly.
+                const modifyErrorMsg = "I'm not sure which item you wanted to change or what the new quantity is. Could you be more specific? (e.g., '3 classic burgers')";
+                setChatHistory(prev => [...prev, { role: 'assistant', content: modifyErrorMsg }]);
             }
             break;
 
         case 'remove_item':
-            // The AI identified an item to remove. Ask for confirmation.
+            // Ask for confirmation to remove.
+            const confirmRemoveMsg = `You want to remove ${actionResult.item_name} from your cart. Is that correct? (Type 'yes' or 'no')`;
+            setChatHistory(prev => [...prev, { role: 'assistant', content: confirmRemoveMsg }]);
             setItemPendingRemoval(actionResult.item_name);
             setCurrentStep('confirm_remove_item');
             break;
             
         case 'clear_cart':
-            // The AI detected a request to clear the cart. Ask for confirmation.
+            // Ask for confirmation to clear.
+            const confirmClearMsg = "Are you sure you want to remove all items from your cart? (Type 'yes' or 'no')";
+            setChatHistory(prev => [...prev, { role: 'assistant', content: confirmClearMsg }]);
             setCurrentStep('confirm_clear_cart');
             break;
 
         case 'proceed_to_checkout':
             if (cart.length > 0) {
-                setCurrentStep('date_selection');
-                const datePrompt = "Perfect! And when would you like your order delivered? (Please select a date)";
+                const datePrompt = "Perfect! And when would you like this delivered?";
                 setChatHistory(prev => [...prev, { role: 'assistant', content: datePrompt }]);
+                setCurrentStep('date_selection');
             } else {
-                const emptyCartMessage = "You haven't added any items to your cart yet. Please select an item first.";
-                setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMessage }]);
+                const emptyCartMsg = "Your cart is empty. Please add an item first.";
+                setChatHistory(prev => [...prev, { role: 'assistant', content: emptyCartMsg }]);
             }
             break;
             
         case 'no_match':
         default:
-            // Do nothing, the bot's response is already in the chat
+            const noMatchMsg = `Sorry, I couldn't find that on our menu. We have items like ${availableItems.slice(0, 3).join(', ')}.`;
+            setChatHistory(prev => [...prev, { role: 'assistant', content: noMatchMsg }]);
             break;
     }
 }
