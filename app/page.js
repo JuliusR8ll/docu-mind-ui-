@@ -17,24 +17,16 @@ export default function Home() {
   const [serverStatus, setServerStatus] = useState('checking');
   const [aiProvider, setAiProvider] = useState('');
   const [processingStats, setProcessingStats] = useState(null);
-  const [currentStep, setCurrentStep] = useState('initial');
-  const [cart, setCart] = useState([]);
+  const { cart, setCart, chatHistory, setChatHistory, currentStep, setCurrentStep , bookingDayOfWeek, setBookingDayOfWeek , orderData, setOrderData  } = useSessionPersistence(user, isAuthenticated);
   const [currentItem, setCurrentItem] = useState(null);
   // Add this new state variable
-const [itemPendingRemoval, setItemPendingRemoval] = useState(null);
+  const [itemPendingRemoval, setItemPendingRemoval] = useState(null);
   // Add this new state variable
-const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
-  const [orderData, setOrderData] = useState({
-    deliveryDate: '',
-    partOfDay: '',
-    deliveryTime: ''
-  });
   const [availableItems, setAvailableItems] = useState([]);
   const [fullCatalog, setFullCatalog] = useState([]);
   const [currentInput, setCurrentInput] = useState('');
   const [inputError, setInputError] = useState('');
   const [stepMessage, setStepMessage] = useState('');
-  const [chatHistory, setChatHistory] = useState([]);
   const [messageCount, setMessageCount] = useState(0);
   const MESSAGE_LIMIT = 30;
   const WARNING_THRESHOLD = MESSAGE_LIMIT - 5;
@@ -45,6 +37,99 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
       fetchCatalogItems();
     }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+  // This effect's only job is to auto-save the session to localStorage.
+  if (isAuthenticated && user && user.username) {
+    const userCartKey = `cart_${user.username}`;
+    const userChatKey = `chat_history_${user.username}`;
+    const userStepKey = `current_step_${user.username}`;
+
+    // --- Save the Cart ---
+    if (cart.length > 0) {
+      localStorage.setItem(userCartKey, JSON.stringify(cart));
+    } else {
+      localStorage.removeItem(userCartKey);
+    }
+
+    // --- Save the Chat History ---
+    if (chatHistory.length > 1) { // Only save if the conversation has started
+      localStorage.setItem(userChatKey, JSON.stringify(chatHistory));
+      // Also save the current step to know where they were
+      localStorage.setItem(userStepKey, currentStep); 
+    } else {
+      localStorage.removeItem(userChatKey);
+      localStorage.removeItem(userStepKey);
+    }
+  }
+}, [cart, chatHistory, currentStep, isAuthenticated, user]);
+
+
+function useSessionPersistence(user, isAuthenticated) {
+  const [cart, setCart] = useState([]);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [currentStep, setCurrentStep] = useState('initial');
+  const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
+  const [orderData, setOrderData] = useState({
+    deliveryDate: '',
+    partOfDay: '',
+    deliveryTime: ''
+  });
+  
+  // Effect for LOADING the session (runs only once when user logs in)
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      const userCartKey = `cart_${user.username}`;
+      const userChatKey = `chat_history_${user.username}`;
+      const userStepKey = `current_step_${user.username}`;
+      const userDayOfWeekKey = `day_of_week_${user.username}`;
+      const userOrderDataKey = `order_data_${user.username}`;
+      
+      const savedChatJSON = localStorage.getItem(userChatKey);
+      if (savedChatJSON) {
+        try {
+          console.log("Found saved session. Restoring...");
+          setChatHistory(JSON.parse(savedChatJSON));
+          setCurrentStep(localStorage.getItem(userStepKey) || 'item_selection');
+          setBookingDayOfWeek(localStorage.getItem(userDayOfWeekKey) || '');
+          const savedOrderDataJSON = localStorage.getItem(userOrderDataKey);
+          setOrderData(savedOrderDataJSON ? JSON.parse(savedOrderDataJSON) : { deliveryDate: '', partOfDay: '', deliveryTime: '' });
+          
+          const savedCartJSON = localStorage.getItem(userCartKey);
+          setCart(savedCartJSON ? JSON.parse(savedCartJSON) : []);
+        } catch (e) {
+          console.error("Failed to restore session, starting fresh.", e);
+          localStorage.removeItem(userCartKey);
+          localStorage.removeItem(userChatKey);
+          localStorage.removeItem(userStepKey);
+          localStorage.removeItem(userDayOfWeekKey);
+          localStorage.removeItem(userOrderDataKey);
+        }
+      }
+    }
+  }, [isAuthenticated, user]);
+
+  // Effect for SAVING the session (runs whenever data changes)
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      const userCartKey = `cart_${user.username}`;
+      const userChatKey = `chat_history_${user.username}`;
+      const userStepKey = `current_step_${user.username}`;
+      const userDayOfWeekKey = `day_of_week_${user.username}`;
+      const userOrderDataKey = `order_data_${user.username}`;
+      
+      if (chatHistory.length > 0) {
+        localStorage.setItem(userChatKey, JSON.stringify(chatHistory));
+        localStorage.setItem(userStepKey, currentStep);
+        localStorage.setItem(userCartKey, JSON.stringify(cart));
+        localStorage.setItem(userDayOfWeekKey, bookingDayOfWeek);
+        localStorage.setItem(userOrderDataKey, JSON.stringify(orderData));
+      }
+    }
+  }, [cart, chatHistory, currentStep, bookingDayOfWeek , orderData, isAuthenticated, user]);
+
+  return { cart, setCart, chatHistory, setChatHistory, currentStep, setCurrentStep , bookingDayOfWeek, setBookingDayOfWeek , orderData, setOrderData };
+}
 
   const checkServerHealth = async () => {
     try {
@@ -58,38 +143,85 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     }
   };
 
-  const fetchCatalogItems = async () => {
-    setStepMessage('Fetching catalog items...');
-    setInputError('');
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_BASE_URL}/api/catalog`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setFullCatalog(response.data.items);
-      setAvailableItems(response.data.items.map(item => item.item_name));
-      
-      if (response.data.items && response.data.items.length > 0) {
-       const initialMessage = `Welcome! I can help you place an order. 😊\nHere are the items we have available today: **${response.data.items.map(item => item.item_name).join(', ')}**.\n\nWhat would you like to get? (You can add multiple items by typing them one at a time)`;
-        
+  // In page.js, REPLACE your entire old fetchCatalogItems function with this one
+
+const fetchCatalogItems = async () => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await axios.get(`${API_BASE_URL}/api/catalog`, { headers: { Authorization: `Bearer ${token}` } });
+    const items = response.data.items || [];
+    setFullCatalog(items);
+    setAvailableItems(items.map(item => item.item_name));
+
+    if (items.length > 0) {
+      let loadedFromStorage = false;
+      if (chatHistory.length === 0) {
+        const initialMessage = `Welcome, ${user?.username}! ...`;
         setChatHistory([{ role: 'assistant', content: initialMessage }]);
         setCurrentStep('item_selection');
-        setStepMessage('');
-        setInputError('');
-        setIsCatalogProcessed(true);
-      } else {
-        setStepMessage('No items could be extracted from the catalog. Please ensure your catalog file has "Item Name", "Price", and "Quantity" columns.');
-        setMessageType('warning');
-        setIsCatalogProcessed(false);
-        resetOrderFlow();
       }
-    } catch (error) {
-      setStepMessage(`❌ Failed to fetch catalog items: ${error.response?.data?.error || error.message}. Please try processing documents again.`);
-      setMessageType('error');
+      setIsCatalogProcessed(true);
+
+      if (user && user.username) {
+        const userCartKey = `cart_${user.username}`;
+        const userChatKey = `chat_history_${user.username}`;
+        const userStepKey = `current_step_${user.username}`;
+        
+        // --- THIS IS THE ROBUST LOADING LOGIC ---
+        // We check for the chat history first, as it's the core of the session.
+        const savedChatJSON = localStorage.getItem(userChatKey);
+        if (savedChatJSON) {
+          try {
+            // Attempt to restore the full session
+            console.log("Found saved chat history. Attempting to restore session...");
+            const savedChat = JSON.parse(savedChatJSON);
+            const savedStep = localStorage.getItem(userStepKey) || 'item_selection'; // Default to item_selection if step is missing
+
+            setChatHistory(savedChat);
+            setCurrentStep(savedStep);
+            
+            // Now, separately try to load the cart. It's okay if it's not there.
+            const savedCartJSON = localStorage.getItem(userCartKey);
+            if (savedCartJSON) {
+              const savedCart = JSON.parse(savedCartJSON);
+              const validatedCart = savedCart.filter(cartItem => 
+                items.some(catalogItem => catalogItem.item_name === cartItem.itemName)
+              );
+              setCart(validatedCart);
+            } else {
+              setCart([]); // Ensure cart is empty if nothing is saved
+            }
+            
+            loadedFromStorage = true;
+            console.log("Session successfully restored from localStorage.");
+          } catch (e) {
+            console.error("Failed to parse saved session, starting fresh.", e);
+            // If anything goes wrong, clear all potentially corrupted keys.
+            localStorage.removeItem(userCartKey);
+            localStorage.removeItem(userChatKey);
+            localStorage.removeItem(userStepKey);
+          }
+        }
+      }
+
+      // Only start a new conversation if no session was restored.
+      if (!loadedFromStorage) {
+        console.log("No saved session found. Starting a new conversation.");
+        const initialMessage = `Welcome, ${user?.username}! I can help you place an order. 😊\nHere are the items we have available today: **${items.map(item => item.item_name).join(', ')}**.\n\nWhat would you like to order?`;
+        setChatHistory([{ role: 'assistant', content: initialMessage }]);
+        setCurrentStep('item_selection');
+      }
+      
+      setIsCatalogProcessed(true);
+    } else {
+      setStepMessage('The catalog is empty. Please upload a catalog file to begin.');
       setIsCatalogProcessed(false);
-      resetOrderFlow();
     }
-  };
+  } catch (error) {
+    setStepMessage(`❌ Failed to fetch catalog items: ${error.response?.data?.error || error.message}.`);
+    setIsCatalogProcessed(false);
+  }
+};
 
   const onFileChange = (e) => {
     const selectedFiles = Array.from(e.target.files);
@@ -138,6 +270,11 @@ const [bookingDayOfWeek, setBookingDayOfWeek] = useState('');
     setMessageType('');
     setIsCatalogProcessed(false);
     setProcessingStats(null);
+    if (user && user.username) {
+      localStorage.removeItem(`cart_${user.username}`);
+      localStorage.removeItem(`chat_history_${user.username}`);
+      localStorage.removeItem(`current_step_${user.username}`);
+    }
     resetOrderFlow();
     
     const fileInput = document.getElementById('file-upload');
@@ -677,11 +814,41 @@ const handleDateValidation = async (selectedDate) => {
   }
 };
 
-  const cancelOrder = () => {
-    const cancelMessage = "Your order has been cancelled. You can continue adding items to your cart.";
-    setChatHistory(prev => [...prev, { role: 'assistant', content: cancelMessage }]);
+// REPLACE your old cancelOrder function with this new version
+
+const cancelOrder = () => {
+  // 1. Reset the state related to the current order conversation.
+  setCart([]);
+  setCurrentItem(null);
+  setOrderData({
+    deliveryDate: '',
+    partOfDay: '',
+    deliveryTime: ''
+  });
+  setMessageCount(0);
+  setCurrentInput('');
+  setItemPendingRemoval(null);
+
+  // 2. Clear this user's ENTIRE saved session from localStorage.
+  if (user && user.username) {
+    localStorage.removeItem(`cart_${user.username}`);
+    // --- ADD THIS LINE ---
+    localStorage.removeItem(`chat_history_${user.username}`);
+    // --- AND ADD THIS LINE ---
+    localStorage.removeItem(`current_step_${user.username}`);
+  }
+
+  // 3. Re-create and display the initial welcome prompt.
+  if (availableItems.length > 0) {
+    const restartMessage = `Okay, your previous order has been cancelled. Let's start a new one. Here are the available items: **${availableItems.join(', ')}**.\n\nWhat would you like to order?`;
+    
+    setChatHistory([{ role: 'assistant', content: restartMessage }]);
     setCurrentStep('item_selection');
-  };
+  } else {
+    // Fallback: If for some reason the catalog is gone, do a full reset.
+    resetAll();
+  }
+};
 
   const getServerStatusColor = () => {
     switch (serverStatus) {

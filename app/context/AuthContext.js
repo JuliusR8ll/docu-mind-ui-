@@ -89,13 +89,27 @@ logoutRef.current = async () => { // <--- Start of the new logout definition
   } catch (error) {
     console.warn('Logout backend call failed (might be expired token, which is fine):', error.message);
   } finally {
+    const loggedOutUser = user;
+
+    // 2. Clear the authentication state and tokens.
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setToken(null);
     setUser(null);
-    delete axios.defaults.headers.common['Authorization']; // Remove auth header
+    delete axios.defaults.headers.common['Authorization'];
+
+    // 3. NEW: Clean up the user-specific session data.
+    if (loggedOutUser && loggedOutUser.username) {
+      console.log(`Clearing session data for user: ${loggedOutUser.username}`);
+      localStorage.removeItem(`cart_${loggedOutUser.username}`);
+      localStorage.removeItem(`chat_history_${loggedOutUser.username}`);
+      localStorage.removeItem(`current_step_${loggedOutUser.username}`);
+    }
+    
+    // --- END OF MODIFICATIONS ---
+
     console.log('Logged out.');
-    router.push('/login'); // Redirect to login page after logout
+    router.push('/login');
   }
 };
 
