@@ -585,10 +585,9 @@ if (currentStep === 'item_selection') {
             }
             break;
             
-        case 'no_match':
         default:
-            const noMatchMsg = `Sorry, I couldn't find that on our menu. We have items like ${availableItems.slice(0, 3).join(', ')}.`;
-            setChatHistory(prev => [...prev, { role: 'assistant', content: noMatchMsg }]);
+            const assistantMessage = actionResult.response;
+            setChatHistory(prev => [...prev, { role: 'assistant', content: assistantMessage }]);
             break;
     }
 }
@@ -974,11 +973,11 @@ const cancelOrder = () => {
           {(isCatalogProcessed || processingStats || currentStep !== 'initial') && (
             <button
               className="reset-button"
-              onClick={resetAll}
+              onClick={cancelOrder}
               disabled={isProcessing}
               style={{ marginTop: '15px' }}
             >
-              🔄 Start New Order / Clear Catalog
+              🔄 Start New Order
             </button>
           )}
         </div>
