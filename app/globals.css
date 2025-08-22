@@ -726,11 +726,12 @@ body {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: 60vh; /* Give the chat window a fixed height */
+  height: 80vh; /* Give the chat window a fixed height */
   max-height: 500px;
   background-color: #f9f9f9;
   border: 1px solid #e1e8ed;
   border-radius: 10px;
+  max-height: 800px;
 }
 
 .chat-history {
